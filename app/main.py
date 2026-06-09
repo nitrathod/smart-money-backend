@@ -3,10 +3,11 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 
 from .config import settings
 from .db import Database
+from .providers import get_provider
 from .scheduler import build_scheduler, PollState
 
 logging.basicConfig(
@@ -54,5 +55,26 @@ async def healthz():
         "market_open": state.market_open,
         "last_poll_ist": state.last_poll_iso(),
         "last_poll_age_sec": round(age, 1) if age is not None else None,
+        "broker": settings.broker,
+    }
+
+
+@app.get("/debug/fetch")
+async def debug_fetch(underlying: str = "NIFTY"):
+    """One-off live fetch to verify broker wiring. Does NOT save. Safe to remove later."""
+    provider = get_provider()
+    try:
+        snap = await provider.fetch_chain(underlying.upper())
+    except Exception as e:  # surface the real reason in the browser
+        raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}")
+    strikes = snap.get("strikes", [])
+    atm = min(strikes, key=lambda s: abs(s["strike"] - snap["spot"]), default=None)
+    return {
+        "underlying": snap["underlying"],
+        "expiry": str(snap["expiry"]),
+        "ts_ist": snap["ts_ist"].isoformat(),
+        "spot": snap["spot"],
+        "strike_count": len(strikes),
+        "atm_sample": atm,
         "broker": settings.broker,
     }
