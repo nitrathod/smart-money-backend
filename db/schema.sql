@@ -1,6 +1,5 @@
-CREATE EXTENSION IF NOT EXISTS timescaledb;
+-- Base schema: PLAIN PostgreSQL. Works on any managed Postgres (Railway, etc.).
 
--- Raw 60s option-chain snapshots (the backtest dataset accumulates here)
 CREATE TABLE IF NOT EXISTS chain_snapshot (
   ts          timestamptz NOT NULL,
   underlying  text        NOT NULL,
@@ -9,9 +8,8 @@ CREATE TABLE IF NOT EXISTS chain_snapshot (
   payload     jsonb       NOT NULL,
   PRIMARY KEY (underlying, ts)
 );
-SELECT create_hypertable('chain_snapshot', 'ts', if_not_exists => TRUE);
+CREATE INDEX IF NOT EXISTS idx_chain_snapshot_ts ON chain_snapshot (ts);
 
--- Emitted stances (filled once the signal engine lands in Phase 3 / S-D)
 CREATE TABLE IF NOT EXISTS stance (
   ts          timestamptz NOT NULL,
   underlying  text        NOT NULL,
@@ -21,4 +19,4 @@ CREATE TABLE IF NOT EXISTS stance (
   payload     jsonb       NOT NULL,
   PRIMARY KEY (underlying, ts)
 );
-SELECT create_hypertable('stance', 'ts', if_not_exists => TRUE);
+CREATE INDEX IF NOT EXISTS idx_stance_ts ON stance (ts);
