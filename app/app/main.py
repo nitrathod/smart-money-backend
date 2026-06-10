@@ -4,6 +4,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .db import Database
@@ -42,6 +43,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Smart Money backend", lifespan=lifespan)
+
+# Read-only public data for now, so the Vercel UI can fetch it from the browser.
+# Tighten allow_origins (and add an access token) when the security pass lands.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/healthz")
