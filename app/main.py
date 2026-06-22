@@ -12,7 +12,7 @@ from .config import settings
 from .db import Database
 from .providers import get_provider
 from .signals.engine import compute_stance
-from .signals.backtest import replay, evaluate
+from .signals.backtest import replay, evaluate, sweep
 from .signals.params import params_for
 from .scheduler import build_scheduler, PollState
 
@@ -157,3 +157,19 @@ async def backtest(underlying: str = "NIFTY", limit: int = 500, horizon: int = 1
     summary["underlying"] = underlying
     summary["thresholds"] = {"theta_floor": p.theta_floor, "theta_conv": p.theta_conv}
     return summary
+
+
+@app.get("/backtest/sweep")
+async def backtest_sweep(underlying: str = "NIFTY", limit: int = 800, horizon: int = 15,
+                         cost: float = 1.0, train: float = 0.7):
+    """Out-of-sample threshold tuning with realistic option-premium P&L.
+
+    Tunes (floor, conv) on the first `train` fraction, scores on the held-out tail.
+    `cost` = estimated brokerage+taxes in premium points per round trip (spread already modeled).
+    """
+    underlying = underlying.upper()
+    limit = max(100, min(limit, 1500))
+    snaps = await app.state.db.get_recent_snapshots(underlying, limit=limit)
+    if not snaps:
+        raise HTTPException(status_code=404, detail="no snapshots recorded for this underlying")
+    return sweep(snaps, horizon_min=horizon, cost=cost, train_frac=train)
