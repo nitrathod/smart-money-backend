@@ -3,6 +3,8 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
+from dataclasses import replace
+
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -10,6 +12,8 @@ from .config import settings
 from .db import Database
 from .providers import get_provider
 from .signals.engine import compute_stance
+from .signals.backtest import replay, evaluate
+from .signals.params import params_for
 from .scheduler import build_scheduler, PollState
 
 logging.basicConfig(
@@ -124,3 +128,32 @@ async def debug_stance(underlying: str = "NIFTY"):
     history = await db.get_recent_snapshots(underlying, limit=30)
     day_open = await db.get_day_open_snapshot(underlying, day_start)
     return compute_stance(snap, day_open, history, None, now_ist=now)
+
+
+@app.get("/backtest")
+async def backtest(underlying: str = "NIFTY", limit: int = 500, horizon: int = 15,
+                   floor: float | None = None, conv: float | None = None):
+    """Replay recorded snapshots through the engine and report the distribution + hit rate.
+
+    Optional threshold overrides for calibration sweeps:
+      ?floor=0.10  -> theta_floor (stand-aside conviction floor)
+      ?conv=0.40   -> theta_conv  (strong-conviction threshold)
+    """
+    underlying = underlying.upper()
+    limit = max(50, min(limit, 1500))  # bound memory/time
+    snaps = await app.state.db.get_recent_snapshots(underlying, limit=limit)
+    if not snaps:
+        raise HTTPException(status_code=404, detail="no snapshots recorded for this underlying")
+    p = params_for(underlying)
+    overrides = {}
+    if floor is not None:
+        overrides["theta_floor"] = floor
+    if conv is not None:
+        overrides["theta_conv"] = conv
+    if overrides:
+        p = replace(p, **overrides)
+    results = replay(snaps, params=p)
+    summary = evaluate(results, horizon_min=horizon)
+    summary["underlying"] = underlying
+    summary["thresholds"] = {"theta_floor": p.theta_floor, "theta_conv": p.theta_conv}
+    return summary

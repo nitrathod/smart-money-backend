@@ -31,8 +31,9 @@ def _spot_bars(series: list[dict]) -> list[dict]:
 
 
 def compute_stance(snap: dict, day_open: dict | None, history: list[dict],
-                   prev_regime: str | None = None, now_ist: datetime | None = None) -> dict:
-    p = params_for(snap.get("underlying", "NIFTY"))
+                   prev_regime: str | None = None, now_ist: datetime | None = None,
+                   params=None) -> dict:
+    p = params or params_for(snap.get("underlying", "NIFTY"))
     now_ist = now_ist or datetime.now(IST)
     ts = _to_dt(snap.get("ts_ist"))
     age = (now_ist - ts).total_seconds()
