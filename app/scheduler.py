@@ -8,6 +8,7 @@ from apscheduler.triggers.cron import CronTrigger
 from .config import settings
 from .market_calendar import is_market_open
 from .providers import get_provider
+from .signals.engine import compute_stance
 
 log = logging.getLogger("smartmoney.scheduler")
 IST = ZoneInfo("Asia/Kolkata")
@@ -19,6 +20,7 @@ class PollState:
     def __init__(self) -> None:
         self.last_poll: datetime | None = None
         self.market_open: bool = False
+        self.regimes: dict[str, str] = {}   # underlying -> last regime (regime hysteresis)
 
     def mark(self) -> None:
         self.last_poll = datetime.now(IST)
@@ -48,6 +50,24 @@ async def poll_once(db, state: PollState) -> None:
             )
         except Exception:
             log.exception("poll failed for %s", underlying)
+            continue
+
+        # signal engine: compute + persist the Stance from this snapshot + recorded history
+        try:
+            now = datetime.now(IST)
+            day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+            history = await db.get_recent_snapshots(underlying, limit=30, before_ts=snap["ts_ist"])
+            day_open = await db.get_day_open_snapshot(underlying, day_start)
+            out = compute_stance(snap, day_open, history, state.regimes.get(underlying), now_ist=now)
+            await db.save_stance(out)
+            state.regimes[underlying] = out["stance"]["regime"]
+            log.info(
+                "stance underlying=%s regime=%s dir=%s conv=%s action=%s size=%s",
+                underlying, out["stance"]["regime"], out["stance"]["direction"],
+                out["stance"]["conviction"], out["stance"]["action"], out["stance"]["size_factor"],
+            )
+        except Exception:
+            log.exception("stance computation failed for %s", underlying)
 
 
 async def refresh_token() -> None:

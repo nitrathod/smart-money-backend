@@ -4,10 +4,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
 from .db import Database
 from .providers import get_provider
+from .signals.engine import compute_stance
 from .scheduler import build_scheduler, PollState
 
 logging.basicConfig(
@@ -41,6 +43,15 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="Smart Money backend", lifespan=lifespan)
+
+# Read-only public data for now, so the Vercel UI can fetch it from the browser.
+# Tighten allow_origins (and add an access token) when the security pass lands.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
 
 
 @app.get("/healthz")
@@ -78,3 +89,38 @@ async def debug_fetch(underlying: str = "NIFTY"):
         "atm_sample": atm,
         "broker": settings.broker,
     }
+
+
+@app.get("/stance/latest")
+async def stance_latest(underlying: str = "NIFTY"):
+    """The Oracle's latest posture for an underlying (the public output)."""
+    out = await app.state.db.get_latest_stance(underlying.upper())
+    if not out:
+        raise HTTPException(status_code=404, detail="no stance recorded yet")
+    return out["stance"]
+
+
+@app.get("/metrics/latest")
+async def metrics_latest(underlying: str = "NIFTY"):
+    """The derived metrics behind the latest stance (PCR, max pain, gamma pin, IV, ...)."""
+    out = await app.state.db.get_latest_stance(underlying.upper())
+    if not out:
+        raise HTTPException(status_code=404, detail="no metrics recorded yet")
+    return out.get("metrics", {})
+
+
+@app.get("/debug/stance")
+async def debug_stance(underlying: str = "NIFTY"):
+    """Compute a full stance live, on demand (fetch + history + engine). Does NOT save."""
+    underlying = underlying.upper()
+    db = app.state.db
+    provider = get_provider()
+    try:
+        snap = await provider.fetch_chain(underlying)
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}")
+    now = datetime.now(IST)
+    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    history = await db.get_recent_snapshots(underlying, limit=30)
+    day_open = await db.get_day_open_snapshot(underlying, day_start)
+    return compute_stance(snap, day_open, history, None, now_ist=now)
